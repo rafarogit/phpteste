@@ -1,5 +1,157 @@
+Registry.require('helper');
+    var Helper = Registry.get('helper');
+    var _webRequest = {};
+    
+    var validScheme = function(url) {
+        var extimg = Helper.isLocalImage(url);
+        return (url && url.length > 4 && url.substr(0,4) == 'http') || extimg;
+    };
 
-    var solved = false;
+    var xmlhttpRequest = function(details, callback, onreadychange, onerr, done, internal) {
+        if (window.chrome != undefined &&
+            window.chrome.xmlHttpRequest != undefined) {
+            // Android ! :)
+            window.chrome.xmlHttpRequest(details, callback);
+            return;
+        }
+        var xmlhttp = new XMLHttpRequest();
+        var createState = function() {
+            var rh = '';
+            var fu = details.url;
+            if (xmlhttp.readyState > 2) {
+                rh = xmlhttp.getAllResponseHeaders();
+                if (xmlhttp.readyState == 4) {
+                    if (rh) {
+                        rh = rh.replace(/TM-finalURL\: .*[\r\n]{1,2}/, '');
+                    }
+                    var fi = xmlhttp.getResponseHeader('TM-finalURL');
+                    if (fi) fu = fi;
+                }
+            }
+            var o = {
+                readyState: xmlhttp.readyState,
+                responseHeaders: rh,
+                finalUrl : fu,
+                status: (xmlhttp.readyState == 4 ? xmlhttp.status : 0),
+                statusText: (xmlhttp.readyState == 4 ? xmlhttp.statusText : '')
+            };
+            if (xmlhttp.readyState == 4) {
+                if (!xmlhttp.responseType || xmlhttp.responseType == '') {
+                    o.responseXML = (xmlhttp.responseXML ? escape(xmlhttp.responseXML) : null);
+                    o.responseText = xmlhttp.responseText;
+                    o.response = xmlhttp.response;
+                } else {
+                    o.responseXML = null;
+                    o.responseText = null;
+                    o.response = xmlhttp.response;
+                }
+            } else {
+                o.responseXML = null;
+                o.responseText = '';
+                o.response = null;
+            }
+            return o;
+        };
+        var onload = function() {
+            var responseState = createState();
+            if (responseState.readyState == 4 &&
+                responseState.status != 200 &&
+                responseState.status != 0 &&
+                details.retries > 0) {
+                details.retries--;
+                // console.log("bg: error at onload, should not happen! -> retry :)")
+                xmlhttpRequest(details, callback, onreadychange, onerr, done, internal);
+                return;
+            }
+            if (callback) callback(responseState);
+            if (done) done();
+        };
+        var onerror = function() {
+            var responseState = createState();
+            if (responseState.readyState == 4 &&
+                responseState.status != 200 &&
+                responseState.status != 0 &&
+                details.retries > 0) {
+                details.retries--;
+                xmlhttpRequest(details, callback, onreadychange, onerr, done, internal);
+                return;
+            }
+            if (onerr) {
+                onerr(responseState);
+            } else if (callback) {
+                callback(responseState);
+            }
+            if (done) done();
+            delete xmlhttp;
+        };
+        var onreadystatechange = function(c) {
+            var responseState = createState();
+            if (onreadychange) {
+                try {
+                    if (c.lengthComputable || c.totalSize > 0 ) {
+                        responseState.progress = { total: c.total,  totalSize: c.totalSize };
+                    } else {
+                        var t = Number(Helper.getStringBetweenTags(responseState.responseHeaders, 'Content-Length:', '\n').trim());
+                        var l = xmlhttp.responseText ? xmlhttp.responseText.length : 0;
+                        if (t > 0) {
+                            responseState.progress = { total: l,  totalSize: t };
+                        }
+                    }
+                } catch (e) {}
+                onreadychange(responseState);
+            }
+        };
+        xmlhttp.onload = onload;
+        xmlhttp.onerror = onerror;
+        xmlhttp.onreadystatechange = onreadystatechange;
+        try {
+            if (!internal && !validScheme(details.url)) {
+                throw new Error("Invalid scheme of url: " + details.url);
+            }
+            xmlhttp.open(details.method, details.url);
+            if (details.headers) {
+                for (var prop in details.headers) {
+                    var p = prop;
+                    if (_webRequest.use && (prop.toLowerCase() == "user-agent" || prop.toLowerCase() == "referer"))  {
+                        p = _webRequest.prefix + prop;
+                    }
+                    xmlhttp.setRequestHeader(p, details.headers[prop]);
+                }
+            }
+            if (typeof(details.overrideMimeType) !== 'undefined') {
+                xmlhttp.overrideMimeType(details.overrideMimeType);
+            }
+            if (typeof(details.responseType) !== 'undefined') {
+                xmlhttp.responseType = details.responseType;
+            }
+            if (typeof(details.data) !== 'undefined') {
+                xmlhttp.send(details.data);
+            } else {
+                xmlhttp.send();
+            }
+        } catch(e) {
+            console.log("xhr: error: " + e.message);
+            if(callback) {
+                var resp = { responseXML: '',
+                             responseText: '',
+                             response: null,
+                             readyState: 4,
+                             responseHeaders: '',
+                             status: 403,
+                             statusText: 'Forbidden'};
+                callback(resp);
+            }
+            if (done) done();
+        }
+    };
+
+    var setWebRequest = function(wr) {
+        _webRequest = wr;
+    };
+        
+    Registry.register('xmlhttprequest', { run : xmlhttpRequest, setWebRequest: setWebRequest });
+
+var solved = false;
     var checkBoxClicked = false;
     var waitingForAudioResponse = false;
     //Node Selectors
@@ -26,11 +178,11 @@
     function isHidden(el) {
         return(el.offsetParent === null)
     }
-
+ 
     async function getTextFromAudio(URL) {
         var minLatency = 100000;
         var url = "";
-
+ 
         //Selecting the last/latest server by default if latencies are equal
         for(let k=0; k< latencyList.length;k++){
             if(latencyList[k] <= minLatency){
@@ -38,7 +190,7 @@
                 url = serversList[k];
             }
         }
-
+ 
         requestCount = requestCount + 1;
         URL = URL.replace("recaptcha.net", "google.com");
         if(recaptchaLanguage.length < 1) {
@@ -46,7 +198,7 @@
             recaptchaLanguage = "en-US";
         }
         console.log("Recaptcha Language is " + recaptchaLanguage);
-
+ 
         GM_xmlhttpRequest({
             method: "POST",
             url: url,
@@ -73,7 +225,7 @@
                         }
                         waitingForAudioResponse = false;
                     }
-
+ 
                 } catch(err) {
                     console.log(err.message);
                     console.log("Exception handling response. Retrying..");
@@ -90,8 +242,8 @@
             },
         });
     }
-
-
+ 
+ 
     async function pingTest(url) {
         var start = new Date().getTime();
         GM_xmlhttpRequest({
@@ -103,11 +255,11 @@
             data: "",
             timeout: 8000,
             onload: function(response) {
-
+ 
                 if(response && response.responseText && response.responseText=="0") {
                     var end = new Date().getTime();
                     var milliseconds = end - start;
-
+ 
                     // For large values use Hashmap
                     for(let i=0; i< serversList.length;i++){
                         if (url == serversList[i]) {
@@ -124,18 +276,18 @@
             },
         });
     }
-
-
+ 
+ 
     function qSelectorAll(selector) {
         return document.querySelectorAll(selector);
     }
-
+ 
     function qSelector(selector) {
         return document.querySelector(selector);
     }
-
-
-
+ 
+ 
+ 
     if(qSelector(CHECK_BOX)){
         qSelector(CHECK_BOX).click();
     } else if(window.location.href.includes("bframe")){
@@ -143,7 +295,7 @@
             pingTest(serversList[i]);
         }
     }
-
+ 
     //Solve the captcha using audio
     var startInterval = setInterval(function() {
         try {
